@@ -1,4 +1,8 @@
+import logging
+
 from odoo import api, models
+
+_logger = logging.getLogger(__name__)
 
 
 class IrMailServer(models.Model):
@@ -7,6 +11,10 @@ class IrMailServer(models.Model):
     @api.model
     def send_email(self, message, *args, **kwargs):
         bcc = self.env['ir.config_parameter'].sudo().get_param('sent_archive.bcc')
+        _logger.info(
+            "sent_archive: send_email called, bcc param=%r, existing Bcc=%r, To=%r",
+            bcc, message['Bcc'], message['To'],
+        )
         if bcc:
             existing = message['Bcc']
             if not existing:

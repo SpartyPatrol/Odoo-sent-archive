@@ -1,84 +1,34 @@
-# Odoo Sent Mail Archive (`sent_archive`)
+# Odoo Sent Mail Archive (`sent_archive`) v19.0.2.0.0
 
-A tiny Odoo 19 module that silently sends a blind copy of **every outgoing email** to an archive address of your choice.
+Two jobs for Odoo 19 behind an SMTP relay (Mailjet) with a Gmail/Workspace mailbox that Odoo also polls:
 
-It was built for a setup where Odoo sends mail through an SMTP relay (Mailjet) on behalf of a Gmail / Google Workspace address. Because the relay delivers the mail directly, no copy lands in the Gmail **Sent** folder. This module fixes that by adding an archive recipient to every message.
+1. **Archive BCC** – adds an archive address to the SMTP *envelope* of every outgoing email (never visible in headers).
+2. **Loop guard** – drops inbound mail that Odoo itself sent (or that is on a drop list) *before* it is routed, so Odoo can never re-ingest its own notifications and re-notify followers.
 
-## How it works
+## Why the loop guard exists
+Mailjet rewrites each `Message-ID`, so Odoo cannot recognise its own mail when it comes back through the polled inbox. Because the `References` header still holds Odoo's `...-openerp-<id>-<model>@...` IDs, the copy is routed to the original record, posted again and sent to the followers again. The guard stops this at the door by checking the `From` address.
 
-Odoo 19 prepares each outgoing message in `ir.mail_server._prepare_email_message__()`, which returns `(smtp_from, smtp_to_list, message)`. This module wraps that method and appends the archive address to `smtp_to_list` (the SMTP *envelope* recipients).
+## System parameters (Settings → Technical → System Parameters)
+| Key | Value | Notes |
+|---|---|---|
+| `sent_archive.bcc` | `joinwsp+odoosent@example.com` | Archive address. Empty = no BCC. |
+| `sent_archive.own_senders` | `joinwsp+notifications@example.com` | **Set this.** Comma-separated addresses Odoo sends from. Inbound mail From any of them is dropped. |
+| `sent_archive.drop_sender_domains` | `instagram.com,signupgenius.com` | Optional. Inbound mail from these domains (and subdomains) is dropped. |
+| `sent_archive.drop_bulk` | `1` | Optional, off by default. Drops mail with `List-Unsubscribe`, `Precedence: bulk/list/junk` or `Auto-Submitted`. Check that your website contact-form mail does not carry those headers first. |
 
-Because only the envelope is changed:
+Own addresses are also detected automatically from `mail.default.from` and the alias domain (default-from, bounce, catchall) and from the archive address.
 
-- The archive address **never appears in any email header**, so real recipients cannot see it, and "Reply All" cannot reach it.
-- The message the recipient receives is unchanged.
-- If anything goes wrong while adding the address, the error is logged and the original email is still sent normally.
+## Log lines
+- `sent_archive: envelope recipients now [...]` – BCC added.
+- `sent_archive: dropped inbound mail, not processed (...)` – guard fired. The reason is in the brackets.
 
-## Requirements
+## Recommended hardening outside this module
+- Set the recruiter user's *Notification* preference to **Handle in Odoo** so Odoo does not email the polled mailbox.
+- Gmail filter: `from:joinwsp+notifications@example.com` → skip inbox, mark as read (Odoo only fetches unread mail).
+- Gmail filter on the archive copy: `deliveredto:joinwsp+odoosent@example.com`.
+- Untick *Keep Original* on the incoming mail server.
 
-- Odoo Community or Enterprise **19.0**
-- Depends only on the `mail` module
-- An SMTP provider that honours envelope recipients (Mailjet does)
+## Compatibility
+Hooks `ir.mail_server._prepare_email_message__` (renamed between 18 and 19) and `mail.thread.message_process`. Re-check both on major upgrades. The guard fails open: if it errors, mail is processed normally.
 
-## Installation
-
-1. Add this repository to your Odoo hosting. On CloudPepper: instance **Details → Addons → add from GitHub**, select this repo, select `sent_archive`, and click **Add module**.
-2. In Odoo, enable developer mode, go to **Apps → Update Apps List**, search for **Sent Mail Archive**, and install it.
-
-## Configuration
-
-Create one system parameter under **Settings → Technical → System Parameters**:
-
-| Key | Value |
-|---|---|
-| `sent_archive.bcc` | `your-address+odoosent@example.com` |
-
-If the parameter is empty or missing, the module does nothing.
-
-Gmail and Google Workspace deliver `name+anything@domain` to `name@domain`, so a plus-address lets you keep the archive separate without a second account.
-
-## Recommended Gmail filter
-
-The archive copy arrives in your normal mailbox, so create a filter to keep it tidy and, if Odoo reads your inbox (for example the Recruiting app creating contacts from unread mail), to prevent a feedback loop.
-
-In Gmail, open the search options and put this in **Has the words**:
-
-```
-deliveredto:your-address+odoosent@example.com
-```
-
-Then choose these actions:
-
-- Skip the Inbox (Archive it)
-- Mark as read
-- Apply the label `Odoo Sent`
-- Never send it to Spam
-
-Use `deliveredto:` rather than `to:`. The archive address is only in the SMTP envelope, so it is never in the `To` header and a `to:` filter will not match.
-
-## Why no loop occurs
-
-1. The filter marks the copy as read and skips the inbox on delivery.
-2. Odoo's incoming mail fetch only reads unread mail, so it never sees the copy.
-3. The copy is addressed to the plus-address, not to any Odoo alias.
-
-## Troubleshooting
-
-- **Look for the log line.** Each send logs `sent_archive: envelope recipients now [...]`. If the archive address is listed there, Odoo did its part; check your SMTP provider's activity log.
-- **Nothing in Gmail?** Search `in:anywhere deliveredto:your-address+odoosent@example.com` to include Spam and Trash.
-- **No log line at all?** The module may not be installed, the system parameter may be missing or misspelled, or a future Odoo version may have renamed `_prepare_email_message__`.
-- **One copy per recipient.** Odoo often sends one message per recipient, so you may receive one archive copy for each.
-- **Provider volume.** Each archive recipient may count toward your SMTP provider's sending limits.
-- **Not seeing sent mail under Settings → Technical → Emails?** Odoo deletes successfully sent `mail.mail` records. Check the record's chatter instead.
-
-## Compatibility note
-
-This module hooks a private, double-underscore method that Odoo renamed between 18 and 19. It may need adjusting for future major versions.
-
-## Credits
-
-Designed and debugged by the repository owner with code and documentation written with the assistance of **Claude** (Anthropic). The v19 recipient-handling approach was worked out through real-world testing against server logs.
-
-## License
-
-LGPL-3
+License: LGPL-3
